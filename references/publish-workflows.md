@@ -9,14 +9,15 @@ Publishing does not require any PaperProof website. Use the website only after p
 1. **Classify** the artifact type. Read `artifact-types.md` if uncertain.
 2. **Collect files** and confirm final content bytes.
 3. **Collect metadata** required by that artifact type.
-4. **Check wallet readiness**: address, SUI gas, WAL/storage path, and selected signer.
-5. **Hash content** with SHA-256 or SDK helper. Keep the exact bytes stable after hashing.
-6. **Upload to Walrus** and record `walrusBlobId` and `walrusBlobObjectId`.
-7. **Build PaperProof transaction** using `@paperproof/sdk-ts` transaction builders.
-8. **Ask wallet to sign and execute**. Do not bypass wallet review.
-9. **Extract canonical result** with SDK result helpers.
-10. **Verify** the created series/version/comments/likes objects are readable.
-11. **Return IDs** and verification status.
+4. **Validate metadata locally before any upload**: required fields, metadata extension counts, string lengths, and the intended SDK builder.
+5. **Check wallet readiness**: address, SUI gas, WAL/storage path, and selected signer.
+6. **Hash content** with SHA-256 or SDK helper. Keep the exact bytes stable after hashing.
+7. **Upload to Walrus** only after local metadata validation passes, then record `walrusBlobId` and `walrusBlobObjectId`.
+8. **Build PaperProof transaction** using `@paperproof/sdk-ts` transaction builders.
+9. **Ask wallet to sign and execute**. Do not bypass wallet review.
+10. **Extract canonical result** with SDK result helpers.
+11. **Verify** the created series/version/comments/likes objects are readable.
+12. **Return IDs** and verification status.
 
 Useful helpers before step 7:
 
@@ -25,15 +26,22 @@ Useful helpers before step 7:
 - `plan-publish.mjs` for missing field checks and SDK builder selection;
 - `check-wallet.mjs` for SUI/WAL/PPRF readiness.
 
+Run `plan-publish.mjs` twice when using generated metadata: once with placeholder
+Walrus IDs to catch schema and metadata-extension errors before upload, then once
+with final `walrusBlobId` and `walrusBlobObjectId` before building the chain
+transaction. This avoids wasting a Walrus upload on metadata that the SDK will
+reject.
+
 ## Add-Version Flow
 
 1. Resolve the target series and current artifact type.
 2. Confirm the wallet is allowed to add a version, normally the artifact owner or permitted operator depending on protocol state.
 3. Prepare new bytes and metadata.
-4. Upload the new bytes to Walrus.
-5. Build the typed add-version transaction: `addBlogPostVersion`, `addTechnicalReportVersion`, `addDatasetVersion`, `addSoftwareReleaseVersion`, `addGenericFileVersion`, or the preprint version flow.
-6. Execute and verify that the series current version now points to the new version.
-7. Report both old and new version IDs when available.
+4. Validate the add-version metadata locally before any upload.
+5. Upload the new bytes to Walrus.
+6. Build the typed add-version transaction: `addBlogPostVersion`, `addTechnicalReportVersion`, `addDatasetVersion`, `addSoftwareReleaseVersion`, `addGenericFileVersion`, or the preprint version flow.
+7. Execute and verify that the series current version now points to the new version.
+8. Report both old and new version IDs when available.
 
 ## Preprint Reserved Flow
 
@@ -60,6 +68,23 @@ Do not present this as a single atomic transaction.
 - Blog: publish as `blogPost`; prefer Markdown package zip; official posts may lock comments.
 - Forum starter topics: publish as `blogPost`; keep comments open.
 - Native prompts: publish as `genericFile` with content type `application/vnd.paperproof.prompt+json`, then register route in PromptRegistry.
+
+## Metadata Extension Limits
+
+The current SDK rejects oversized metadata extension arrays before transaction
+construction. Keep these constraints in mind before uploading content to Walrus:
+
+- `seriesMetadata`: at most 4 entries.
+- `versionMetadata`: at most 4 entries.
+- Each metadata key/value should stay concise; long values may be truncated by
+  helper scripts or rejected by SDK validation.
+- Put long source notes, file manifests, and schemas inside the artifact content
+  package rather than on chain.
+
+For datasets, prefer putting `README.md`, `schema.json`, and `sources.json` in
+the zip package, while keeping chain metadata to high-value identifiers such as
+dataset version, record count, coverage years, package hash, SDK version, and
+Walrus epoch count.
 
 ## Result Checklist
 

@@ -27,6 +27,30 @@ Use this reference to translate natural-language requests into PaperProof protoc
 - Series inspection: run `node scripts/query-series.mjs --series=<seriesId>`.
 - Event lookup: run `node scripts/query-events.mjs --module=publishing --event=ArtifactPublishedEvent` or pass `--moveEventType=<type>`.
 
+On Windows PowerShell, avoid plain `>` redirection when generating JSON for
+Node helpers because it may write UTF-16. Use `Set-Content -Encoding utf8` or
+write the JSON file from Node/Python instead.
+
+## Mainnet Publish Pattern
+
+For generated or packaged artifacts, use this order to avoid unnecessary Walrus
+uploads:
+
+1. Create the final package bytes locally.
+2. Compute `sha256` and byte size.
+3. Draft metadata with placeholder `walrusBlobId` and `walrusBlobObjectId` if
+   the final IDs are not known yet.
+4. Run `plan-publish.mjs` and fix missing fields or metadata-extension issues.
+5. Check wallet readiness.
+6. Upload to Walrus only after the local plan is valid.
+7. Replace placeholder Walrus references and run `plan-publish.mjs` again.
+8. Build and execute the SDK transaction with the user's explicit signer.
+9. Read back the series/version and verify the Walrus blob hash when possible.
+
+For dataset packages, keep chain metadata sparse. Put source notes, schemas,
+field descriptions, and file manifests inside the zip package rather than in
+`seriesMetadata` or `versionMetadata`.
+
 ## Intent Checklist
 
 Before writing code or building a transaction, identify:

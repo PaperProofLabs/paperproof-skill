@@ -77,6 +77,9 @@ Good for engineering reports, protocol reports, verification summaries, and form
 - `contentType`
 
 Prefer a package format when the dataset has multiple files.
+For dataset packages, put schema, source notes, file manifests, and detailed
+methodology inside the zip. Keep `seriesMetadata` and `versionMetadata` short;
+each array should have no more than 4 entries.
 
 ### Software Release
 
@@ -123,5 +126,5 @@ Use for protocol-native prompts with `application/vnd.paperproof.prompt+json` an
 - Use concise summaries and abstracts, not marketing copy.
 - Use stable tags/keywords that help discovery.
 - Put app-specific or official flags into metadata attributes rather than title text.
+- Keep metadata attributes short and sparse; use content files for long provenance notes.
 - Never invent authorship, affiliation, or license if the user has not provided it.
-
