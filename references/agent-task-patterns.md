@@ -16,6 +16,17 @@ Use this reference to translate natural-language requests into PaperProof protoc
 | "Publish an official prompt" | Native prompt registry workflow | Confirm operator authority and route ID |
 | "Create memory for this agent" | Memory registry workflow | Confirm app ID, owner, provider, and one-active-entry policy |
 
+## Helper Script Routing
+
+- Wallet readiness: run `node scripts/check-wallet.mjs --address=<wallet>`.
+- File hash and size: run `node scripts/file-digest.mjs <file> <content-type>`.
+- Metadata draft: run `node scripts/metadata-template.mjs <artifactType>`.
+- Publish readiness: run `node scripts/plan-publish.mjs --type=<artifactType> --input=<metadata.json>`.
+- Add-version readiness: add `--series=<seriesId>` to `plan-publish.mjs`.
+- Object inspection: run `node scripts/read-object.mjs --id=<objectId>`.
+- Series inspection: run `node scripts/query-series.mjs --series=<seriesId>`.
+- Event lookup: run `node scripts/query-events.mjs --module=publishing --event=ArtifactPublishedEvent` or pass `--moveEventType=<type>`.
+
 ## Intent Checklist
 
 Before writing code or building a transaction, identify:
@@ -49,6 +60,10 @@ Explain PaperProof in operational terms:
 
 Avoid forcing users to learn every object before acting. Ask for the smallest missing input needed to proceed.
 
+## Website Independence
+
+Do not assume `paperproof.site` or any other website is available. Natural-language PaperProof usage should resolve to protocol operations: metadata preparation, Walrus storage, Sui transactions, indexer/canonical event reads, and SDK object views. Preview URLs are optional outputs, not required inputs.
+
 ## Write Confirmation Template
 
 Before mainnet writes, say:
@@ -73,4 +88,3 @@ Walrus blob: <blob id>
 Transaction: <digest>
 Verification: <verified/partially verified/not checked>
 ```
-

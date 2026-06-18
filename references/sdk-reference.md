@@ -134,3 +134,22 @@ When a runtime cannot install the SDK, continue with read-only planning when pos
 - prepare metadata JSON and an unsigned transaction plan.
 
 For mainnet writes, prefer pausing at a clear handoff rather than reconstructing complex transaction builders from memory.
+
+## Skill Helper Scripts
+
+After cloning the skill repository, run `npm install` to enable protocol helper scripts. They are intentionally website-independent.
+
+Read-only scripts:
+
+- `node scripts/check-wallet.mjs --address=<wallet>`
+- `node scripts/read-object.mjs --id=<objectId>`
+- `node scripts/query-series.mjs --series=<seriesId>`
+- `node scripts/query-events.mjs --module=publishing --event=ArtifactPublishedEvent --limit=20`
+
+Preparation scripts:
+
+- `node scripts/file-digest.mjs <file> <content-type>`
+- `node scripts/metadata-template.mjs <artifactType>`
+- `node scripts/plan-publish.mjs --type=<artifactType> --input=<metadata.json>`
+
+These scripts do not sign or submit user transactions. For writes, use the returned plan to build SDK transactions and hand them to a user-controlled wallet or explicitly configured signer.

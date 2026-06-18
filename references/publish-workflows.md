@@ -2,6 +2,8 @@
 
 Publishing writes to Walrus and Sui mainnet. Tell the user what will be public and ask for confirmation before any irreversible write.
 
+Publishing does not require any PaperProof website. Use the website only after publication as an optional preview or sharing surface.
+
 ## New Artifact Flow
 
 1. **Classify** the artifact type. Read `artifact-types.md` if uncertain.
@@ -15,6 +17,13 @@ Publishing writes to Walrus and Sui mainnet. Tell the user what will be public a
 9. **Extract canonical result** with SDK result helpers.
 10. **Verify** the created series/version/comments/likes objects are readable.
 11. **Return IDs** and verification status.
+
+Useful helpers before step 7:
+
+- `file-digest.mjs` for hash and file size;
+- `metadata-template.mjs` for typed metadata shape;
+- `plan-publish.mjs` for missing field checks and SDK builder selection;
+- `check-wallet.mjs` for SUI/WAL/PPRF readiness.
 
 ## Add-Version Flow
 
@@ -67,4 +76,3 @@ Return:
 - content hash
 - transaction digest
 - whether content was read back and hash-verified
-

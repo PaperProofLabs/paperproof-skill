@@ -1,0 +1,22 @@
+{
+  "name": "paperproof-protocol-skill",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Codex skill resources and protocol helper scripts for PaperProof.",
+  "scripts": {
+    "check:wallet": "node scripts/check-wallet.mjs",
+    "config": "node scripts/mainnet-config.mjs",
+    "digest": "node scripts/file-digest.mjs",
+    "metadata": "node scripts/metadata-template.mjs",
+    "plan:publish": "node scripts/plan-publish.mjs",
+    "query:events": "node scripts/query-events.mjs",
+    "query:object": "node scripts/read-object.mjs",
+    "query:series": "node scripts/query-series.mjs"
+  },
+  "dependencies": {
+    "@mysten/sui": "^2.16.0",
+    "@paperproof/sdk-ts": "0.2.6"
+  }
+}
+

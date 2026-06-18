@@ -5,7 +5,7 @@ description: Operate the PaperProof protocol for AI agents and developer assista
 
 # PaperProof Protocol
 
-Use this skill as a protocol client guide, not as a website automation guide. Prefer `@paperproof/sdk-ts`, Sui clients, Walrus clients, and indexer APIs. Use the website only for human preview links or when the user explicitly requests browser interaction.
+Use this skill as a protocol client guide, not as a website automation guide. Prefer `@paperproof/sdk-ts`, Sui clients, Walrus clients, and indexer APIs. The skill must remain useful if every PaperProof website or UI disappears. Use websites only for optional human preview links or when the user explicitly requests browser interaction.
 
 The skill is suitable for general PaperProof users, developers, operators, researchers, and AI agents. It should work for third-party PaperProof applications as well as PaperProof Labs official applications.
 
@@ -35,6 +35,7 @@ If the request is broad, ask one short clarifying question only when the missing
 - Do not sign transactions for the user unless the runtime already has an explicit signer chosen by the user.
 - Tell the user before any operation that writes to Sui mainnet or Walrus.
 - Treat Sui objects, PaperProof events, Walrus blobs, and SDK deployment constants as protocol facts; do not infer facts from website DOM.
+- Do not require the official website for publishing, querying, verifying, prompt operations, memory operations, or wallet readiness checks.
 - For Walrus-backed artifacts, verify the bytes against the version content hash when the task is verification-sensitive.
 - If a write depends on shared Sui objects, rebuild the transaction before retrying.
 - If a task touches official registries or governance permissions, confirm the caller has authority before building write transactions.
@@ -87,6 +88,21 @@ If `@paperproof/sdk-ts` is unavailable:
 2. If installation is blocked, use direct Sui object reads, Move call targets, Walrus APIs, and the deployment constants in `references/protocol-map.md`.
 3. If writes cannot be prepared safely, stop at a publication checklist or unsigned transaction plan.
 4. Never simulate a website click path as a substitute for missing protocol capability unless the user explicitly asks for website operation.
+
+## Helper Scripts
+
+The `scripts/` folder contains protocol-oriented helpers. They do not require the PaperProof website.
+
+- `mainnet-config.mjs`: print canonical mainnet package, object, and coin constants.
+- `file-digest.mjs`: compute filename, byte size, and `sha256` content hash.
+- `metadata-template.mjs`: print an input template for each artifact type.
+- `plan-publish.mjs`: validate publish/add-version metadata and return the SDK builder plan.
+- `check-wallet.mjs`: query SUI, WAL, and PPRF balances for a wallet address.
+- `read-object.mjs`: read a Sui object by ID with content and owner fields.
+- `query-series.mjs`: use the SDK to read a PaperProof series, current version, comments tree, and likes book.
+- `query-events.mjs`: query PaperProof events using SDK query providers.
+
+If a helper needs dependencies, run `npm install` in the skill directory. Helpers that write to chain are intentionally not included as automatic signers; use SDK transaction builders and the user's explicit wallet/signer.
 
 ## Output Style
 
