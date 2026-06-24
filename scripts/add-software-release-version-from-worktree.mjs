@@ -191,12 +191,12 @@ async function main() {
   const isDirty = (await execCapture('git', ['status', '--porcelain'], SKILL_ROOT)).length > 0;
   const sourceHash = args['source-hash'] ?? `git:${shortSha}${isDirty ? '+dirty' : ''}`;
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const projectName = args['project-name'] ?? current.project_name ?? 'paperproof-skill';
+  const projectName = args['project-name'] ?? current.project_name ?? 'paperproof-community-skill';
   const nextVersion = Number(details.series.currentVersion) + 1;
   const versionName = args['version-name'] ?? `v${nextVersion}`;
-  const repositoryUrl = args['repository-url'] ?? current.repository_url ?? 'https://github.com/PaperProofLabs/paperproof-skill';
+  const repositoryUrl = args['repository-url'] ?? current.repository_url ?? 'https://github.com/PaperProofLabs/paperproof-community-skill';
   const license = args.license ?? current.license ?? 'Apache-2.0';
-  const changelog = args.changelog ?? `paperproof-skill community usability refactor and generic retention workflow ${timestamp}`;
+  const changelog = args.changelog ?? `paperproof-community-skill community usability refactor and generic retention workflow ${timestamp}`;
 
   const reportDir = path.resolve(args['report-dir'] ?? path.join(SKILL_ROOT, 'artifacts'));
   const outputZip = path.resolve(args['output-zip'] ?? path.join(reportDir, `${projectName}-${timestamp}.zip`));

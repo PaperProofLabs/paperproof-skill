@@ -106,6 +106,38 @@ The `scripts/` folder contains protocol-oriented helpers. They do not require th
 
 If a helper needs dependencies, run `npm install` in the skill directory. Helpers that write to chain must use the user's explicit wallet/signer. Do not ask community users to reveal secrets; for local signer helpers, the user must already control their own signer environment. Prefer unsigned or dry-run modes until the user has chosen a signer path.
 
+## Retention Workflow
+
+Use `extend-walrus-retention.mjs` when the task is about Walrus retention
+windows and extension operations, not about one website page.
+
+This helper answers three questions:
+
+1. which latest versions or blob objects still have too-short Walrus retention;
+2. what their current `start_epoch -> end_epoch` window is;
+3. how to extend them efficiently, preferably in batch.
+
+Typical entry points:
+
+- `--explore-types=...` to scan active artifacts from an indexer/explore API;
+- `--series-json=...` to scan an explicit JSON list of series;
+- `--manifest-json=...` to extract artifact records from app manifest JSON.
+
+Dry-run first:
+
+```powershell
+node .\scripts\extend-walrus-retention.mjs --series-json=.\artifacts\series.json
+```
+
+Real extension:
+
+```powershell
+node .\scripts\extend-walrus-retention.mjs --run --signer-env=..\paperproof-contracts\jstest\.env --explore-types=1,2,3,4,5
+```
+
+Default target window is `10 epochs`. Batch mode is preferred; sequential mode
+is mainly for debugging or explicit one-by-one operation.
+
 ## Output Style
 
 For user-facing task results, include:
