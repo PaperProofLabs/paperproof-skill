@@ -18,6 +18,6 @@
   "dependencies": {
     "@mysten/sui": "^2.16.0",
     "@mysten/walrus": "^1.1.7",
-    "@paperproof/sdk-ts": "file:../paperproof-sdk-ts/paperproof-sdk-ts-0.2.7.tgz"
+    "@paperproof/sdk-ts": "0.2.7"
   }
 }
