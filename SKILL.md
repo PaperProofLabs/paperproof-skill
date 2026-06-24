@@ -18,7 +18,7 @@ Classify the user request before acting:
 - **Query**: find artifacts, series, versions, owner activity, events, comments, governance, prompts, or memory entries.
 - **Verify**: check chain bindings, canonical events, Walrus content, hashes, deployment IDs, or provenance.
 - **Prepare**: choose an artifact type, draft metadata, build a publication checklist, or package files.
-- **Operate official registries**: native prompts, Agent Memory registry, governance-controlled availability, or official content publishing.
+- **Operate application registries**: native prompts, Agent Memory registry, governance-controlled availability, or application content publishing.
 
 If the request is broad, ask one short clarifying question only when the missing choice blocks safe action. Otherwise choose conservative defaults and continue.
 
@@ -47,7 +47,7 @@ If the request is broad, ask one short clarifying question only when the missing
 - Read `references/publish-workflows.md` for new publications, add-version flows, comments defaults, and Walrus staging.
 - Read `references/query-verify-workflows.md` for reads, canonical event checks, Walrus verification, and reporting.
 - Read `references/wallet-and-funding.md` for wallet, SUI, WAL, signing, and balance readiness checks.
-- Read `references/official-registries.md` for native prompts, Agent Memory registry, governance control, and official content.
+- Read `references/official-registries.md` for native prompts, Agent Memory registry, governance control, and application-managed registry patterns.
 - Read `references/error-handbook.md` when diagnosing failed transactions, relayers, Walrus reads, or Move aborts.
 - Read `references/sdk-reference.md` when writing code with the TypeScript SDK.
 - Read `references/agent-task-patterns.md` when turning natural-language user requests into concrete PaperProof actions.
@@ -101,9 +101,10 @@ The `scripts/` folder contains protocol-oriented helpers. They do not require th
 - `read-object.mjs`: read a Sui object by ID with content and owner fields.
 - `query-series.mjs`: use the SDK to read a PaperProof series, current version, comments tree, and likes book.
 - `query-events.mjs`: query PaperProof events using SDK query providers.
-- `add-version-from-local-file.mjs`: dry-run or execute a controlled add-version flow for a local PDF/file. Dry-run is read-only; `--run` requires an explicit local signer env and uploads to Walrus.
+- `add-version-from-local-file.mjs`: dry-run or execute a controlled add-version flow for a local PDF/file. Dry-run is read-only; `--run` requires an explicit user-controlled signer environment and uploads to Walrus.
+- `extend-walrus-retention.mjs`: inspect current Walrus retention windows for selected artifacts and optionally batch-extend them to a target epoch window.
 
-If a helper needs dependencies, run `npm install` in the skill directory. Helpers that write to chain must use the user's explicit wallet/signer. Do not ask community users to reveal secrets; for local signer helpers, the user must already control their own signer environment.
+If a helper needs dependencies, run `npm install` in the skill directory. Helpers that write to chain must use the user's explicit wallet/signer. Do not ask community users to reveal secrets; for local signer helpers, the user must already control their own signer environment. Prefer unsigned or dry-run modes until the user has chosen a signer path.
 
 ## Output Style
 

@@ -33,6 +33,12 @@ with final `walrusBlobId` and `walrusBlobObjectId` before building the chain
 transaction. This avoids wasting a Walrus upload on metadata that the SDK will
 reject.
 
+For signer selection, keep community workflows generic:
+
+- use unsigned/dry-run flows first;
+- prefer browser wallet or local CLI signing for third-party users;
+- use environment-managed signer material only when the user already controls that runtime.
+
 ## Add-Version Flow
 
 1. Resolve the target series and current artifact type.
@@ -64,10 +70,10 @@ Do not present this as a single atomic transaction.
 - If a shared object conflict occurs, rebuild the transaction with fresh object versions.
 - Never reuse transaction bytes after a failed shared-object write unless the SDK explicitly marks it safe.
 
-## Official Content Defaults
+## Application Content Defaults
 
 - Docs: publish as `genericFile`; lock comments; use stable docs path metadata.
-- Blog: publish as `blogPost`; prefer Markdown package zip; official posts may lock comments.
+- Blog: publish as `blogPost`; prefer Markdown package zip; application posts may lock comments.
 - Forum starter topics: publish as `blogPost`; keep comments open.
 - Native prompts: publish as `genericFile` with content type `application/vnd.paperproof.prompt+json`, then register route in PromptRegistry.
 

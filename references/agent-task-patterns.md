@@ -13,7 +13,7 @@ Use this reference to translate natural-language requests into PaperProof protoc
 | "Is this artifact real?" | Verification | Resolve series/version, check package IDs and events |
 | "Why does the body not load?" | Content/Walrus diagnosis | Read version header and test Walrus blob availability |
 | "Make this AI-usable" | Prepare metadata/package | Choose artifact type and draft machine-readable metadata |
-| "Publish an official prompt" | Native prompt registry workflow | Confirm operator authority and route ID |
+| "Publish an app prompt" | Native prompt registry workflow | Confirm operator authority and route ID |
 | "Create memory for this agent" | Memory registry workflow | Confirm app ID, owner, provider, and one-active-entry policy |
 
 ## Helper Script Routing
@@ -24,6 +24,7 @@ Use this reference to translate natural-language requests into PaperProof protoc
 - Publish readiness: run `node scripts/plan-publish.mjs --type=<artifactType> --input=<metadata.json>`.
 - Add-version readiness: add `--series=<seriesId>` to `plan-publish.mjs`.
 - Local-file add version dry-run: run `node scripts/add-version-from-local-file.mjs --type=<preprint|technicalReport|genericFile> --series=<seriesId> --file=<path>` first without `--run`.
+- Walrus retention inspection: run `node scripts/extend-walrus-retention.mjs --series-json=<file>` or `--manifest-json=<file>` first without `--run`.
 - Object inspection: run `node scripts/read-object.mjs --id=<objectId>`.
 - Series inspection: run `node scripts/query-series.mjs --series=<seriesId>`.
 - Event lookup: run `node scripts/query-events.mjs --module=publishing --event=ArtifactPublishedEvent` or pass `--moveEventType=<type>`.
@@ -74,7 +75,7 @@ Use this order when replacing the latest content of an existing series:
 Before writing code or building a transaction, identify:
 
 - target network;
-- user role: ordinary publisher, app developer, official operator, governance participant, or auditor;
+- user role: ordinary publisher, app developer, registry operator, governance participant, or auditor;
 - task mode: publish, add version, query, verify, package, or administer registry;
 - object identifier: artifact code, series ID, version ID, wallet address, route ID, or provider entry;
 - content source: local file, URL, generated text, zip package, PDF, JSON, or existing Walrus blob;
@@ -87,7 +88,7 @@ Before writing code or building a transaction, identify:
 - Use `genericFile` for arbitrary files and protocol packages when no specific artifact type fits.
 - Use Markdown package zip for blog-like content that may later gain images.
 - Keep comments open for forum topics and ask before locking user-published artifacts.
-- Lock comments for official docs, prompts, and configuration artifacts unless told otherwise.
+- Lock comments for docs, prompts, and configuration artifacts unless told otherwise.
 - Prefer latest-version policy for ordinary native prompt updates; use pinned versions only for controlled rollout.
 
 ## User-Facing Explanations

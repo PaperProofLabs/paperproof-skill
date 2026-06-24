@@ -54,7 +54,7 @@ When checking Walrus:
 - Distinguish read failure from expired blob and transport/CORS failure.
 - Prefer SDK helpers such as `readAndVerifyWalrusContent` and `walrusReferenceFromVersion`.
 - If only chain data is available, say content is not byte-verified.
-- For official content, check expiry and recommend renewal before the expiration epoch.
+- For application-managed content, check expiry and recommend renewal before the expiration epoch.
 
 ## User-Friendly Report
 
@@ -71,4 +71,3 @@ Walrus: <readable/expired/unavailable>
 Events: <canonical/non-canonical/not checked>
 Notes: <short explanation>
 ```
-

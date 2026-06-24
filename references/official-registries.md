@@ -1,6 +1,6 @@
-# Official Registries
+# Application Registries
 
-Official registries are protocol-level bindings managed through application authority, PaperProof authority, or governance-like controls. Do not treat them as ordinary user content. For third-party applications, replace PaperProof Labs official app IDs and routes with the application's own IDs.
+Application registries are protocol-level bindings managed through application authority, protocol authority, or governance-like controls. Do not treat them as ordinary user content. Replace sample app IDs and routes with the application-specific IDs and routes the caller actually controls.
 
 ## Native Prompts
 
@@ -12,7 +12,7 @@ application/vnd.paperproof.prompt+json
 
 The prompt registry maps an application route or capability name to a prompt artifact series. Use `useLatest: true` for default rolling updates or a pinned version ID for controlled rollout.
 
-The PaperProof Labs official app prompt manifest includes routes such as:
+A prompt manifest may include routes such as:
 
 - `copilot/global`
 - `copilot/memory`
@@ -44,13 +44,13 @@ The PaperProof Labs official app prompt manifest includes routes such as:
 4. Set latest or pinned policy.
 5. Verify the app can resolve the prompt series and download the package.
 
-Only authorized operators should write prompt registry entries for an app they control. Ordinary users may publish prompt artifacts, but they should not be represented as official registry bindings unless the relevant authority registers them.
+Only authorized operators should write prompt registry entries for an app they control. Ordinary users may publish prompt artifacts, but they should not be represented as application registry bindings unless the relevant authority registers them.
 
 ## Agent Memory Registry
 
-The memory registry is a governed discovery and availability layer. It does not store private memory bodies. Private memory lives in the memory provider, currently MemWal-oriented integrations.
+The memory registry is a governed discovery and availability layer. It does not store private memory bodies. Private memory lives in the memory provider, often MemWal-oriented integrations.
 
-PaperProof Labs official Copilot defaults:
+One application might choose defaults such as:
 
 - `appId`: `paperproof-app`
 - `namespaceRoot`: `paperproof/copilot`
@@ -61,11 +61,11 @@ PaperProof Labs official Copilot defaults:
 
 ### Memory Entry State
 
-A usable official memory should satisfy:
+A usable application memory should satisfy:
 
 - entry belongs to the configured MemoryRegistry;
 - owner wallet matches the user;
-- `appId` matches the official app or the third-party app requested by the user;
+- `appId` matches the intended application;
 - provider policy is available;
 - entry is available;
 - owner has not disabled it;
@@ -82,22 +82,22 @@ A usable official memory should satisfy:
 
 ## Governance Relationship
 
-Native prompt and memory registry control is intentionally lighter than full proposal execution. The registry checks authority/governance-bound permissions for official writes and availability controls. Do not assume every registry update requires a public vote, and do not assume every application uses PaperProof Labs authority.
+Native prompt and memory registry control is intentionally lighter than full proposal execution. The registry checks authority/governance-bound permissions for application writes and availability controls. Do not assume every registry update requires a public vote, and do not assume every application uses the same authority layout.
 
 Use governance checks for:
 
-- official prompt route registration;
+- application prompt route registration;
 - prompt availability or pinning policy if exposed;
 - memory provider policy;
-- memory entry official availability;
+- memory entry availability;
 - emergency disabling or version pinning.
 
-## Official Content
+## Application Content
 
-Official Docs, Blog, and Forum content may be PaperProof's first users of its own protocol:
+Docs, Blog, and Forum content may be early users of the protocol:
 
 - Docs are `genericFile` artifacts, usually locked comments.
 - Blog posts are `blogPost` artifacts, preferably Markdown package zips; comments may be locked for official posts.
 - Forum starter topics are `blogPost` artifacts with open comments.
 
-When publishing official content, add stable metadata that lets the app resolve the intended page without relying on website state alone.
+When publishing application content, add stable metadata that lets the app resolve the intended page without relying on website state alone.

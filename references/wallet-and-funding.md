@@ -31,6 +31,7 @@ If exact fee estimation is unavailable, report that the check is approximate and
 
 - Browser apps should build unsigned PTBs and delegate signing to wallet adapters.
 - Node tools may use an explicit signer only if the user has already configured it in that environment.
+- When a helper supports multiple signer modes, prefer these in order: unsigned/dry-run, browser wallet, local CLI/keystore, then environment-managed signer material.
 - AI agents should prepare transactions and explain them before execution.
 - For mainnet writes, give the user the action label and the IDs that will be touched.
 
@@ -56,4 +57,3 @@ Tell the user:
 - current detected amount if available;
 - whether retry is reasonable after top-up;
 - whether partial read-only verification can still proceed.
-

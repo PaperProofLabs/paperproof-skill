@@ -10,8 +10,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 
-import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
-import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { SuiJsonRpcClient } from '@mysten/sui/jsonRpc';
 import { SuiGrpcClient } from '@mysten/sui/grpc';
 import { walrus } from '@mysten/walrus';
@@ -27,6 +25,7 @@ import {
   robustWalrusWriteBlob,
   stringifyForJson,
 } from '@paperproof/sdk-ts';
+import { loadSignerSet, normalizeAddress } from './lib/signer.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -39,11 +38,16 @@ Add a new version to an existing PaperProof series from a local file.
 
 Usage:
   node scripts/add-version-from-local-file.mjs --type=preprint --series=<seriesId> --file=<path>
-  node scripts/add-version-from-local-file.mjs --run --type=technicalReport --series=<seriesId> --file=<path> --signer-env=<env> --account=4
-  node scripts/add-version-from-local-file.mjs --run --type=genericFile --series=<seriesId> --file=<path> --signer-env=<env> --account=4
+  node scripts/add-version-from-local-file.mjs --run --type=technicalReport --series=<seriesId> --file=<path> --signer-env=<env>
+  node scripts/add-version-from-local-file.mjs --run --type=genericFile --series=<seriesId> --file=<path> --signer-mode=single-env
 
 Default mode is a dry run. --run writes the file to Walrus and submits a Sui
 mainnet add-version transaction with the explicitly configured signer.
+
+Signer modes:
+  --signer-mode=auto         auto-detect single-env first, then indexed-env
+  --signer-mode=single-env   use ADDRESS / PRIVATE_KEY (or custom --address-var / --private-key-var)
+  --signer-mode=indexed-env  use ADDR_1 / PRIVATE_KEY_1 ... ADDR_16 / PRIVATE_KEY_16
 `.trim();
 }
 
@@ -80,39 +84,17 @@ async function waitForLatestVersion(sdk, seriesId, expectedVersionId, expectedCo
   );
 }
 
-function normalizeAddress(value) {
-  const raw = String(value ?? '').trim().toLowerCase().replace(/^"|"$/g, '');
-  const noPrefix = raw.startsWith('0x') ? raw.slice(2) : raw.startsWith('x') ? raw.slice(1) : raw;
-  return `0x${noPrefix.padStart(64, '0')}`;
-}
-
-function parseEnv(text) {
-  const values = new Map();
-  for (const rawLine of text.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith('#')) continue;
-    const match = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(line);
-    if (!match) continue;
-    let value = match[2].trim();
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1);
-    values.set(match[1], value);
-  }
-  return values;
-}
-
 async function loadAccount(args) {
-  const account = Number(args.account ?? 1);
-  const envPath = args['signer-env'];
-  if (!envPath) throw new Error('Missing --signer-env=<path> for --run. Do not pass private keys on the command line.');
-  const env = parseEnv(await fs.readFile(path.resolve(envPath), 'utf8'));
-  const address = normalizeAddress(env.get(`ADDR_${account}`));
-  const secret = env.get(`PRIVATE_KEY_${account}`);
-  if (!secret) throw new Error(`Missing PRIVATE_KEY_${account} in signer env.`);
-  const decoded = decodeSuiPrivateKey(secret);
-  assert(decoded.scheme === 'ED25519', `ADDR_${account} must use an Ed25519 key.`);
-  const signer = Ed25519Keypair.fromSecretKey(decoded.secretKey);
-  assert(normalizeAddress(signer.toSuiAddress()) === address, `ADDR_${account} signer mismatch.`);
-  return { account, address, signer };
+  const mode = args.signerMode ?? args['signer-mode'] ?? (args.account ? 'indexed-env' : 'auto');
+  const accounts = await loadSignerSet(args, { defaultMode: mode });
+  const requested = Number(args.account ?? 1);
+  if (mode === 'indexed-env' || args.account) {
+    const match = accounts.find((item) => item.index === requested);
+    if (!match) throw new Error(`Could not find indexed signer account ${requested}.`);
+    return { account: requested, address: match.address, signer: match.signer };
+  }
+  const [first] = accounts;
+  return { account: requested, address: first.address, signer: first.signer };
 }
 
 function sha256Hex(bytes) {
