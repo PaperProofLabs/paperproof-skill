@@ -28,6 +28,9 @@ Use this reference to translate natural-language requests into PaperProof protoc
 - Object inspection: run `node scripts/read-object.mjs --id=<objectId>`.
 - Series inspection: run `node scripts/query-series.mjs --series=<seriesId>`.
 - Event lookup: run `node scripts/query-events.mjs --module=publishing --event=ArtifactPublishedEvent` or pass `--moveEventType=<type>`.
+- Governance config/proposal inspection: run `node scripts/query-governance.mjs` or `node scripts/query-governance.mjs --proposal=<id|objectId>`.
+- Governance signal proposal dry-run: run `node scripts/create-signal-proposal.mjs --preflight --title="..." --description="..." --stake-pprf=<amount>`.
+- Governance vote dry-run: run `node scripts/vote-proposal.mjs --preflight --proposal=<id|objectId> --side=yes|no --stake-pprf=<amount>`.
 
 On Windows PowerShell, avoid plain `>` redirection when generating JSON for
 Node helpers because it may write UTF-16. Use `Set-Content -Encoding utf8` or

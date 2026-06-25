@@ -7,6 +7,9 @@
   "scripts": {
     "check:wallet": "node scripts/check-wallet.mjs",
     "add:version:file": "node scripts/add-version-from-local-file.mjs",
+    "governance:create-signal": "node scripts/create-signal-proposal.mjs",
+    "governance:vote": "node scripts/vote-proposal.mjs",
+    "governance:query": "node scripts/query-governance.mjs",
     "config": "node scripts/mainnet-config.mjs",
     "digest": "node scripts/file-digest.mjs",
     "metadata": "node scripts/metadata-template.mjs",

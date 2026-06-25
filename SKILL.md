@@ -55,6 +55,7 @@ If the request is broad, ask one short clarifying question only when the missing
 - Read `references/query-verify-workflows.md` for reads, canonical event checks, Walrus verification, and reporting.
 - Read `references/wallet-and-funding.md` for wallet, SUI, WAL, signing, and balance readiness checks.
 - Read `references/official-registries.md` for native prompts, Agent Memory registry, governance control, and application-managed registry patterns.
+- Read `references/governance-workflows.md` for community proposal creation, voting, and governance query flows.
 - Read `references/error-handbook.md` when diagnosing failed transactions, relayers, Walrus reads, or Move aborts.
 - Read `references/sdk-reference.md` when writing code with the TypeScript SDK.
 - Read `references/agent-task-patterns.md` when turning natural-language user requests into concrete PaperProof actions.
@@ -110,6 +111,9 @@ The `scripts/` folder contains protocol-oriented helpers. They do not require th
 - `read-object.mjs`: read a Sui object by ID with content and owner fields.
 - `query-series.mjs`: use the SDK to read a PaperProof series, current version, comments tree, and likes book.
 - `query-events.mjs`: query PaperProof events using SDK query providers.
+- `query-governance.mjs`: read governance config and a proposal by numeric id or proposal object id.
+- `create-signal-proposal.mjs`: preflight, dry-run, or submit a community governance signal proposal with an explicit signer.
+- `vote-proposal.mjs`: preflight, dry-run, or submit a yes/no vote on an active proposal with an explicit signer.
 - `add-version-from-local-file.mjs`: dry-run or execute a controlled add-version flow for a local PDF/file. Dry-run is read-only; `--run` requires an explicit user-controlled signer environment and uploads to Walrus.
 - `extend-walrus-retention.mjs`: inspect current Walrus retention windows for selected artifacts and optionally batch-extend them to a target epoch window.
 
