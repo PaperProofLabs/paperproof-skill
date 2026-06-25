@@ -22,6 +22,12 @@ Classify the user request before acting:
 
 If the request is broad, ask one short clarifying question only when the missing choice blocks safe action. Otherwise choose conservative defaults and continue.
 
+## Community Defaults
+
+- Prefer `jsonrpc` for reads and readiness checks unless the user explicitly asks for gRPC.
+- Treat `fallback` as the default query mode when a confirmation read may need a second path.
+- Keep this skill reusable for third-party apps, notebooks, and agents; do not assume official server paths or browser sessions.
+
 ## When Not To Use This Skill
 
 - The user only wants general Sui or Walrus help with no PaperProof artifact, registry, or verification context.
@@ -39,6 +45,7 @@ If the request is broad, ask one short clarifying question only when the missing
 - For Walrus-backed artifacts, verify the bytes against the version content hash when the task is verification-sensitive.
 - If a write depends on shared Sui objects, rebuild the transaction before retrying.
 - If a task touches official registries or governance permissions, confirm the caller has authority before building write transactions.
+- If an add-version run reports `uploadOk=true` but `latestVersionConfirmed=false`, report it as a confirmation-stage problem, not an automatic chain failure.
 
 ## Reference Routing
 
@@ -51,16 +58,18 @@ If the request is broad, ask one short clarifying question only when the missing
 - Read `references/error-handbook.md` when diagnosing failed transactions, relayers, Walrus reads, or Move aborts.
 - Read `references/sdk-reference.md` when writing code with the TypeScript SDK.
 - Read `references/agent-task-patterns.md` when turning natural-language user requests into concrete PaperProof actions.
+- Read `references/publish-workflows.md` first for publish/add-version flow, transport defaults, and operator-facing result states.
 
 ## Default Execution Pattern
 
 1. Restate the detected task type and any irreversible action.
 2. Gather missing inputs: wallet address, target artifact/series, files, metadata, desired visibility, and whether comments should be open or locked.
 3. Check readiness: Sui network, deployment constants, wallet balance, WAL/storage path, file hashes, and authority if applicable.
-4. Use the SDK or direct protocol APIs to prepare the operation.
-5. For writes, return an unsigned transaction or ask the user's wallet/signer to review and sign.
-6. After execution, extract and report artifact code, series ID, version ID, comments tree ID, likes book ID, Walrus blob ID/object ID, transaction digest, and preview URL if available.
-7. For reads, distinguish missing data, expired Walrus content, non-canonical events, and temporary transport failures.
+4. Prefer `--preflight` before `--run` for add-version flows.
+5. Use the SDK or direct protocol APIs to prepare the operation.
+6. For writes, return an unsigned transaction or ask the user's wallet/signer to review and sign.
+7. After execution, extract and report artifact code, series ID, version ID, comments tree ID, likes book ID, Walrus blob ID/object ID, transaction digest, and preview URL if available.
+8. For reads, distinguish missing data, expired Walrus content, non-canonical events, and temporary transport failures.
 
 ## Package Baseline
 

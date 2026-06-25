@@ -44,12 +44,37 @@ For signer selection, keep community workflows generic:
 1. Resolve the target series and current artifact type.
 2. Confirm the wallet is allowed to add a version, normally the artifact owner or permitted operator depending on protocol state.
 3. Prepare new bytes and metadata.
-4. Validate the add-version metadata locally before any upload.
-5. Upload the new bytes to Walrus.
+4. Run a transport-aware preflight before any upload.
+   Check RPC reachability, Walrus relay reachability, signer resolution, SUI/WAL/PPRF balance reads, and target series readability.
+5. Validate the add-version metadata locally before any upload.
+6. Upload the new bytes to Walrus.
    Use a 10-epoch storage baseline unless the user explicitly asks for a different Walrus retention period.
-6. Build the typed add-version transaction: `addBlogPostVersion`, `addTechnicalReportVersion`, `addDatasetVersion`, `addSoftwareReleaseVersion`, `addGenericFileVersion`, or the preprint version flow.
-7. Execute and verify that the series current version now points to the new version.
-8. Report both old and new version IDs when available.
+7. Build the typed add-version transaction: `addBlogPostVersion`, `addTechnicalReportVersion`, `addDatasetVersion`, `addSoftwareReleaseVersion`, `addGenericFileVersion`, or the preprint version flow.
+8. Execute and distinguish four operator-facing states:
+   `uploadOk`, `transactionSubmitted`, `chainResultObserved`, and `latestVersionConfirmed`.
+9. If the final latest-version readback fails, do not treat that alone as a confirmed chain failure.
+   Return the transaction digest and a follow-up `query-series.mjs` confirmation command.
+10. Report both old and new version IDs when available.
+
+### Add-Version Helper Flags
+
+`add-version-from-local-file.mjs` supports transport and readiness controls so community users can adapt to endpoint instability without changing protocol flow:
+
+- `--preflight`
+- `--rpc=<url>`
+- `--transport=grpc|jsonrpc`
+- `--query-transport=none|jsonrpc|graphql|fallback`
+- `--walrus-relay=<url>`
+- `--retry-attempts=<n>`
+- `--retry-base-ms=<ms>`
+- `--confirm-attempts=<n>`
+- `--confirm-delay-ms=<ms>`
+
+Recommended community default:
+
+- read path on `jsonrpc`
+- query path on `fallback`
+- explicit preflight before `--run`
 
 ## Preprint Reserved Flow
 

@@ -8,24 +8,26 @@ import fs from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { setTimeout as delay } from 'node:timers/promises';
 
-import { SuiJsonRpcClient } from '@mysten/sui/jsonRpc';
-import { SuiGrpcClient } from '@mysten/sui/grpc';
-import { walrus } from '@mysten/walrus';
+import { fromBase64 } from '@mysten/bcs';
 import {
   ARTIFACT_TYPES,
-  JsonRpcPaperProofProvider,
-  MAINNET_DEPLOYMENT,
   PaperProofTxBuilder,
-  createDeployment,
-  createPaperProofSDK,
   extractAddVersionResult,
   robustExecuteTransaction,
   robustWalrusWriteBlob,
   stringifyForJson,
 } from '@paperproof/sdk-ts';
+
 import { loadSignerSet, normalizeAddress } from './lib/signer.mjs';
+import {
+  confirmLatestVersion,
+  createResultError,
+  createSkillRuntime,
+  errorMessage,
+  getArg,
+  runPublishPreflight,
+} from './lib/publish-runtime.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -37,12 +39,24 @@ function usage() {
 Add a new version to an existing PaperProof series from a local file.
 
 Usage:
-  node scripts/add-version-from-local-file.mjs --type=preprint --series=<seriesId> --file=<path>
-  node scripts/add-version-from-local-file.mjs --run --type=technicalReport --series=<seriesId> --file=<path> --signer-env=<env>
-  node scripts/add-version-from-local-file.mjs --run --type=genericFile --series=<seriesId> --file=<path> --signer-mode=single-env
+  node scripts/add-version-from-local-file.mjs --type=technicalReport --series=<seriesId> --file=<path>
+  node scripts/add-version-from-local-file.mjs --preflight --type=technicalReport --series=<seriesId> --file=<path> --signer-env=<env> --account=4
+  node scripts/add-version-from-local-file.mjs --run --type=technicalReport --series=<seriesId> --file=<path> --signer-env=<env> --account=4
 
-Default mode is a dry run. --run writes the file to Walrus and submits a Sui
-mainnet add-version transaction with the explicitly configured signer.
+Modes:
+  default         dry run; no mainnet write
+  --preflight     run structured readiness checks
+  --run           upload to Walrus and submit the add-version transaction
+
+Transport:
+  --rpc=<url>
+  --transport=grpc|jsonrpc
+  --query-transport=none|jsonrpc|graphql|fallback
+  --walrus-relay=<url>
+  --retry-attempts=<n>
+  --retry-base-ms=<ms>
+  --confirm-attempts=<n>
+  --confirm-delay-ms=<ms>
 
 Signer modes:
   --signer-mode=auto         auto-detect single-env first, then indexed-env
@@ -52,9 +66,10 @@ Signer modes:
 }
 
 function parseArgs(argv = process.argv.slice(2)) {
-  const args = { run: false, help: false };
+  const args = { run: false, help: false, preflight: false };
   for (const item of argv) {
     if (item === '--run') args.run = true;
+    else if (item === '--preflight' || item === '--preflight-only') args.preflight = true;
     else if (item === '--help' || item === '-h') args.help = true;
     else if (item.startsWith('--')) {
       const index = item.indexOf('=');
@@ -69,32 +84,29 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-async function waitForLatestVersion(sdk, seriesId, expectedVersionId, expectedContentHash, attempts = 6, delayMs = 2000) {
-  let last = null;
-  for (let index = 0; index < attempts; index += 1) {
-    last = await sdk.query.getSeriesDetails(seriesId);
-    if (last.series.currentVersionId === expectedVersionId && last.currentVersion.contentHash === expectedContentHash) {
-      return last;
-    }
-    if (index < attempts - 1) await delay(delayMs);
-  }
-  throw new Error(
-    `Latest version did not advance to the added version after ${attempts} checks. `
-    + `Observed currentVersionId=${last?.series?.currentVersionId ?? 'unknown'}, expected=${expectedVersionId}.`,
-  );
-}
-
-async function loadAccount(args) {
+async function loadAccount(args, required) {
+  const envSpecified = Boolean(getArg(args, 'signerEnv', 'signer-env'));
   const mode = args.signerMode ?? args['signer-mode'] ?? (args.account ? 'indexed-env' : 'auto');
-  const accounts = await loadSignerSet(args, { defaultMode: mode });
-  const requested = Number(args.account ?? 1);
-  if (mode === 'indexed-env' || args.account) {
-    const match = accounts.find((item) => item.index === requested);
-    if (!match) throw new Error(`Could not find indexed signer account ${requested}.`);
-    return { account: requested, address: match.address, signer: match.signer };
+  if (!required && !envSpecified && !args.account) return null;
+  try {
+    const accounts = await loadSignerSet(args, { defaultMode: mode });
+    const requested = Number(args.account ?? 1);
+    if (mode === 'indexed-env' || args.account) {
+      const match = accounts.find((item) => item.index === requested);
+      if (!match) throw new Error(`Could not find indexed signer account ${requested}.`);
+      return { ok: true, account: requested, address: match.address, signer: match.signer };
+    }
+    const [first] = accounts;
+    return { ok: true, account: requested, address: first.address, signer: first.signer };
+  } catch (error) {
+    if (!required) {
+      return {
+        ...createResultError('signer', error),
+        ok: false,
+      };
+    }
+    throw error;
   }
-  const [first] = accounts;
-  return { account: requested, address: first.address, signer: first.signer };
 }
 
 function sha256Hex(bytes) {
@@ -137,25 +149,145 @@ function metadataAttributes(entries) {
     .map(([key, value]) => ({ key, value: String(value).slice(0, 511) }));
 }
 
-async function uploadContent(walrusClient, signer, content, run, label) {
+function shouldFallbackToManualWalrus(error) {
+  const text = errorMessage(error).toLowerCase();
+  return text.includes('fetch failed')
+    || text.includes('rpcerror')
+    || text.includes('getbalance')
+    || text.includes('batchgetobjects')
+    || text.includes('multigetobjects')
+    || text.includes('terminated')
+    || text.includes('aborterror')
+    || text.includes('connection timeout')
+    || text.includes('econnreset')
+    || text.includes('tls');
+}
+
+function registeredBlobObjectId(execution, fallbackBlobId) {
+  const event = (execution.events ?? []).find((item) => item.type?.endsWith('::BlobRegistered'));
+  const fromEvent = event?.parsedJson?.object_id ?? event?.parsedJson?.objectId;
+  if (typeof fromEvent === 'string' && fromEvent.startsWith('0x')) return fromEvent;
+
+  const createdBlob = (execution.objectChanges ?? []).find(
+    (item) => item?.type === 'created' && String(item.objectType ?? '').endsWith('::blob::Blob'),
+  );
+  if (typeof createdBlob?.objectId === 'string') return createdBlob.objectId;
+
+  throw new Error(`Could not find Walrus blob object id for blob ${fallbackBlobId}.`);
+}
+
+async function manualWalrusUpload(runtime, signer, content, label) {
+  const flow = runtime.walrusClient.walrus.writeBlobFlow({ blob: content.bytes });
+  const encoded = await flow.encode();
+  const nonce = encoded.nonce ? fromBase64(encoded.nonce) : null;
+  if (!nonce) throw new Error('Walrus manual flow did not return a nonce for upload relay mode.');
+
+  const computed = await runtime.walrusClient.walrus.computeBlobMetadata({
+    bytes: content.bytes,
+    nonce,
+  });
+  if (computed.blobId !== encoded.blobId) {
+    throw new Error(`Walrus blob id mismatch during manual fallback: ${computed.blobId} != ${encoded.blobId}`);
+  }
+
+  const registerTx = flow.register({
+    epochs: 10,
+    deletable: true,
+    owner: signer.toSuiAddress(),
+  });
+  const registerExecution = await robustExecuteTransaction(runtime.baseClient, signer, registerTx, `${label} walrus register`, {
+    attempts: runtime.retryAttempts,
+    baseDelayMs: runtime.retryBaseDelayMs,
+  });
+  const blobObjectId = registeredBlobObjectId(registerExecution, encoded.blobId);
+
+  const relayUpload = await runtime.walrusClient.walrus.writeBlobToUploadRelay({
+    blobId: encoded.blobId,
+    nonce,
+    txDigest: registerExecution.digest,
+    blob: content.bytes,
+    blobObjectId,
+    deletable: true,
+    requiresTip: true,
+    encodingType: computed.metadata.encodingType,
+  });
+
+  const certifyTx = runtime.walrusClient.walrus.certifyBlobTransaction({
+    certificate: relayUpload.certificate,
+    blobId: encoded.blobId,
+    blobObjectId,
+    deletable: true,
+  });
+  const certifyExecution = await robustExecuteTransaction(runtime.baseClient, signer, certifyTx, `${label} walrus certify`, {
+    attempts: runtime.retryAttempts,
+    baseDelayMs: runtime.retryBaseDelayMs,
+  });
+
+  return {
+    blobId: encoded.blobId,
+    blobObjectId,
+    byteLength: content.fileSize,
+    registerDigest: registerExecution.digest,
+    certifyDigest: certifyExecution.digest,
+    strategy: 'manual-flow-fallback',
+  };
+}
+
+async function uploadContent(runtime, signer, content, run, label) {
   if (!run) {
     const digest = content.contentHash.replace(/^sha256:/, '').slice(0, 24);
     return {
+      ok: true,
+      uploadOk: true,
       blobId: `local-add-version-${digest}`,
       blobObjectId: `0x${'6'.repeat(64)}`,
       byteLength: content.fileSize,
+      strategy: 'dry-run-placeholder',
     };
   }
-  const upload = await robustWalrusWriteBlob(walrusClient, signer, content.bytes, {
-    label: label.slice(0, 96),
-    fallback: false,
-    attempts: 4,
-  });
-  return {
-    blobId: upload.blobId,
-    blobObjectId: upload.blobObjectId,
-    byteLength: content.fileSize,
-  };
+
+  try {
+    const upload = await robustWalrusWriteBlob(runtime.walrusClient, signer, content.bytes, {
+      label: label.slice(0, 96),
+      fallback: false,
+      attempts: runtime.retryAttempts,
+      baseDelayMs: runtime.retryBaseDelayMs,
+      epochs: 10,
+      owner: signer.toSuiAddress(),
+    });
+    return {
+      ok: true,
+      uploadOk: true,
+      blobId: upload.blobId,
+      blobObjectId: upload.blobObjectId,
+      byteLength: content.fileSize,
+      strategy: 'sdk-write-blob',
+    };
+  } catch (error) {
+    if (!shouldFallbackToManualWalrus(error)) {
+      return {
+        ok: false,
+        uploadOk: false,
+        error: createResultError('upload', error, { transport: runtime.transport }),
+      };
+    }
+    try {
+      const upload = await manualWalrusUpload(runtime, signer, content, label.slice(0, 96));
+      return {
+        ok: true,
+        uploadOk: true,
+        ...upload,
+      };
+    } catch (fallbackError) {
+      return {
+        ok: false,
+        uploadOk: false,
+        fallbackAttempted: true,
+        primaryError: createResultError('upload', error, { transport: runtime.transport }),
+        error: createResultError('upload', fallbackError, { transport: runtime.transport }),
+      };
+    }
+  }
 }
 
 function commonVersionMetadata(args, content, currentVersion) {
@@ -235,71 +367,188 @@ function toSdkResponse(execution) {
   };
 }
 
+function expectedArtifactType(type) {
+  return type === 'preprint'
+    ? ARTIFACT_TYPES.preprint
+    : type === 'technicalReport'
+      ? ARTIFACT_TYPES.technicalReport
+      : ARTIFACT_TYPES.genericFile;
+}
+
+function confirmationCommand(args, runtime) {
+  const bits = [
+    'node .\\scripts\\query-series.mjs',
+    `--series=${args.series}`,
+    `--transport=${runtime.transport}`,
+    `--query-transport=${runtime.queryTransport}`,
+    `--rpc=${runtime.rpcUrl}`,
+  ];
+  return bits.join(' ');
+}
+
+async function writeReport(reportDir, prefix, report) {
+  await fs.mkdir(reportDir, { recursive: true });
+  const reportPath = path.join(reportDir, `${prefix}-${Date.now()}.json`);
+  await fs.writeFile(reportPath, `${stringifyForJson(report)}\n`, 'utf8');
+  return reportPath;
+}
+
 async function main() {
   const args = parseArgs();
   if (args.help) {
     console.log(usage());
     return;
   }
+
   const type = args.type;
   assert(type === 'preprint' || type === 'technicalReport' || type === 'genericFile', 'Supported --type values for this helper: preprint, technicalReport, genericFile.');
   assert(args.series, 'Missing --series=<seriesId>.');
   assert(args.file, 'Missing --file=<path>.');
-  const contentType = args['content-type'] ?? (type === 'genericFile' ? 'application/octet-stream' : 'application/pdf');
-  const account = args.run ? await loadAccount(args) : null;
-  const deployment = createDeployment(MAINNET_DEPLOYMENT);
-  const sdk = createPaperProofSDK({ network: 'mainnet', transport: 'grpc', queryTransport: 'none' });
-  const sui = new SuiJsonRpcClient({ url: deployment.rpcUrl ?? 'https://fullnode.mainnet.sui.io:443' });
-  const walrusClient = new SuiGrpcClient({ baseUrl: deployment.rpcUrl, network: 'mainnet' }).$extend(
-    walrus({
-      network: 'mainnet',
-      uploadRelay: {
-        host: 'https://upload-relay.mainnet.walrus.space',
-        sendTip: { max: 5_000_000 },
-      },
-    }),
-  );
-  const view = await sdk.query.getSeriesDetails(args.series);
-  const expectedType = type === 'preprint'
-    ? ARTIFACT_TYPES.preprint
-    : type === 'technicalReport'
-      ? ARTIFACT_TYPES.technicalReport
-      : ARTIFACT_TYPES.genericFile;
-  assert(view.series.artifactType === expectedType, `Series artifact type ${view.series.artifactType} does not match ${type}.`);
-  if (account) assert(view.series.owner.toLowerCase() === account.address.toLowerCase(), `Series owner ${view.series.owner} does not match signer ${account.address}.`);
-  const content = await readContent(args.file, contentType);
+
+  const run = Boolean(args.run);
+  const runtime = createSkillRuntime(args);
   const reportDir = path.resolve(args['report-dir'] ?? path.join(SKILL_ROOT, 'artifacts'));
-  await fs.mkdir(reportDir, { recursive: true });
+  const contentType = args['content-type'] ?? (type === 'genericFile' ? 'application/octet-stream' : 'application/pdf');
+  const signerResult = await loadAccount(args, run);
+  const preflight = await runPublishPreflight({
+    runtime,
+    requireSigner: run,
+    signerResult,
+    seriesId: args.series,
+    expectedArtifactType: expectedArtifactType(type),
+  });
+
+  const content = await readContent(args.file, contentType);
+  const baseReport = {
+    ok: false,
+    run,
+    preflightOnly: Boolean(args.preflight) && !run,
+    transport: runtime.transport,
+    queryTransport: runtime.queryTransport,
+    rpcUrl: runtime.rpcUrl,
+    walrusRelay: runtime.walrusRelay,
+    sender: signerResult?.ok ? signerResult.address : null,
+    signerAccount: signerResult?.ok ? signerResult.account ?? null : null,
+    artifactType: type,
+    seriesId: args.series,
+    content: {
+      file: content.fullPath,
+      filename: content.filename,
+      fileSize: content.fileSize,
+      pageCount: content.pageCount,
+      contentHash: content.contentHash,
+      contentType,
+    },
+    preflight,
+    uploadOk: false,
+    transactionSubmitted: false,
+    transactionDigest: null,
+    chainResultObserved: false,
+    latestVersionConfirmed: false,
+    confirmationCommand: confirmationCommand(args, runtime),
+  };
+
+  if (args.preflight && !run) {
+    const reportPath = await writeReport(reportDir, 'add-version-preflight', {
+      ...baseReport,
+      ok: preflight.ok,
+    });
+    console.log(stringifyForJson({ ...baseReport, ok: preflight.ok, reportPath }));
+    return;
+  }
+
+  if (!preflight.ok) {
+    const reportPath = await writeReport(reportDir, 'add-version-preflight-failed', {
+      ...baseReport,
+      error: {
+        category: 'preflight',
+        code: 'PREFLIGHT_FAILED',
+        summary: 'Preflight failed. No Walrus upload or add-version transaction was attempted.',
+        criticalFailures: preflight.criticalFailures,
+      },
+    });
+    console.log(stringifyForJson({
+      ...baseReport,
+      error: {
+        category: 'preflight',
+        code: 'PREFLIGHT_FAILED',
+        summary: 'Preflight failed. No Walrus upload or add-version transaction was attempted.',
+        criticalFailures: preflight.criticalFailures,
+      },
+      reportPath,
+    }));
+    return;
+  }
+
+  const view = await runtime.sdk.query.getSeriesDetails(args.series);
+  assert(view.series.artifactType === expectedArtifactType(type), `Series artifact type ${view.series.artifactType} does not match ${type}.`);
+  if (signerResult?.ok) {
+    assert(normalizeAddress(view.series.owner) === signerResult.address, `Series owner ${view.series.owner} does not match signer ${signerResult.address}.`);
+  }
+
   if (content.contentHash === view.currentVersion.contentHash) {
     const skipped = {
+      ...baseReport,
       ok: true,
       skipped: true,
       reason: 'Local file already matches the current version hash.',
-      run: args.run,
-      sender: account?.address ?? null,
       seriesOwner: view.series.owner,
-      artifactType: type,
       artifactCode: view.series.artifactCode,
-      seriesId: args.series,
       currentVersion: view.series.currentVersion,
       currentVersionId: view.series.currentVersionId,
       title: view.currentVersion.rawFields?.title,
-      content: {
-        file: content.fullPath,
-        filename: content.filename,
-        fileSize: content.fileSize,
-        pageCount: content.pageCount,
-        contentHash: content.contentHash,
-        contentType,
-      },
+      latestVersionConfirmed: true,
     };
-    const reportPath = path.join(reportDir, `add-version-skipped-${Date.now()}.json`);
-    await fs.writeFile(reportPath, `${stringifyForJson(skipped)}\n`, 'utf8');
+    const reportPath = await writeReport(reportDir, 'add-version-skipped', skipped);
     console.log(stringifyForJson({ ...skipped, reportPath }));
     return;
   }
-  const upload = await uploadContent(walrusClient, account?.signer, content, args.run, `paperproof-add-version-${view.series.artifactCode ?? args.series}`);
-  const txb = new PaperProofTxBuilder(deployment);
+
+  if (!run) {
+    const dryRun = {
+      ...baseReport,
+      ok: true,
+      artifactCode: view.series.artifactCode,
+      seriesOwner: view.series.owner,
+      previousVersion: view.series.currentVersion,
+      previousVersionId: view.series.currentVersionId,
+      previousContentHash: view.currentVersion.contentHash,
+      newVersion: String(Number(view.series.currentVersion) + 1),
+      newVersionId: ZERO,
+      title: view.currentVersion.rawFields?.title,
+    };
+    const reportPath = await writeReport(reportDir, 'add-version-dry-run', dryRun);
+    console.log(stringifyForJson({ ...dryRun, reportPath }));
+    return;
+  }
+
+  const upload = await uploadContent(runtime, signerResult.signer, content, run, `paperproof-add-version-${view.series.artifactCode ?? args.series}`);
+  if (!upload.ok) {
+    const reportPath = await writeReport(reportDir, 'add-version-upload-failed', {
+      ...baseReport,
+      artifactCode: view.series.artifactCode,
+      seriesOwner: view.series.owner,
+      previousVersion: view.series.currentVersion,
+      previousVersionId: view.series.currentVersionId,
+      previousContentHash: view.currentVersion.contentHash,
+      error: upload.error,
+      upload,
+    });
+    console.log(stringifyForJson({
+      ...baseReport,
+      artifactCode: view.series.artifactCode,
+      seriesOwner: view.series.owner,
+      previousVersion: view.series.currentVersion,
+      previousVersionId: view.series.currentVersionId,
+      previousContentHash: view.currentVersion.contentHash,
+      error: upload.error,
+      upload,
+      reportPath,
+    }));
+    return;
+  }
+
+  const txb = new PaperProofTxBuilder(runtime.deployment);
   const input = type === 'preprint'
     ? preprintInput(args, content, upload, view.currentVersion)
     : type === 'technicalReport'
@@ -310,48 +559,99 @@ async function main() {
     : type === 'technicalReport'
       ? txb.addTechnicalReportVersion(input)
       : txb.addGenericFileVersion(input);
-  if (account) tx.setSenderIfNotSet(account.address);
-  const execution = args.run
-    ? await robustExecuteTransaction(sui, account.signer, tx, `add ${type} version`)
-    : { digest: null, events: [] };
-  const added = args.run
-    ? extractAddVersionResult(toSdkResponse(execution), deployment)
-    : { seriesId: args.series, versionId: ZERO, artifactType: expectedType, version: BigInt(Number(view.series.currentVersion) + 1) };
-  if (args.run) {
-    await waitForLatestVersion(sdk, args.series, added.versionId, content.contentHash);
+  tx.setSenderIfNotSet(signerResult.address);
+
+  let execution;
+  try {
+    execution = await robustExecuteTransaction(runtime.baseClient, signerResult.signer, tx, `add ${type} version`, {
+      attempts: runtime.retryAttempts,
+      baseDelayMs: runtime.retryBaseDelayMs,
+    });
+  } catch (error) {
+    const reportPath = await writeReport(reportDir, 'add-version-transaction-failed', {
+      ...baseReport,
+      artifactCode: view.series.artifactCode,
+      seriesOwner: view.series.owner,
+      previousVersion: view.series.currentVersion,
+      previousVersionId: view.series.currentVersionId,
+      previousContentHash: view.currentVersion.contentHash,
+      uploadOk: true,
+      upload,
+      error: createResultError('transaction', error, { transport: runtime.transport }),
+    });
+    console.log(stringifyForJson({
+      ...baseReport,
+      artifactCode: view.series.artifactCode,
+      seriesOwner: view.series.owner,
+      previousVersion: view.series.currentVersion,
+      previousVersionId: view.series.currentVersionId,
+      previousContentHash: view.currentVersion.contentHash,
+      uploadOk: true,
+      upload,
+      error: createResultError('transaction', error, { transport: runtime.transport }),
+      reportPath,
+    }));
+    return;
   }
+
+  let added = null;
+  let chainResultObserved = false;
+  try {
+    added = extractAddVersionResult(toSdkResponse(execution), runtime.deployment);
+    chainResultObserved = true;
+  } catch (error) {
+    added = {
+      seriesId: args.series,
+      versionId: ZERO,
+      artifactType: expectedArtifactType(type),
+      version: BigInt(Number(view.series.currentVersion) + 1),
+    };
+  }
+
+  const confirmation = chainResultObserved
+    ? await confirmLatestVersion({
+        runtime,
+        seriesId: args.series,
+        expectedVersionId: added.versionId,
+        expectedContentHash: content.contentHash,
+      })
+    : {
+        ok: false,
+        ...createResultError('confirmation', new Error('Skipped because add-version result could not be extracted from events.'), { transport: runtime.transport }),
+      };
+
   const report = {
-    ok: true,
-    run: args.run,
-    sender: account?.address ?? null,
-    seriesOwner: view.series.owner,
-    artifactType: type,
+    ...baseReport,
+    ok: chainResultObserved,
     artifactCode: view.series.artifactCode,
-    seriesId: args.series,
+    seriesOwner: view.series.owner,
     previousVersion: view.series.currentVersion,
     previousVersionId: view.series.currentVersionId,
+    previousContentHash: view.currentVersion.contentHash,
     newVersion: String(added.version),
     newVersionId: added.versionId,
     title: view.currentVersion.rawFields?.title,
-    content: {
-      file: content.fullPath,
-      filename: content.filename,
-      fileSize: content.fileSize,
-      pageCount: content.pageCount,
-      contentHash: content.contentHash,
-      previousContentHash: view.currentVersion.contentHash,
-      contentType,
-    },
-    upload,
+    uploadOk: true,
+    transactionSubmitted: true,
     transactionDigest: execution.digest,
+    chainResultObserved,
+    latestVersionConfirmed: confirmation.ok,
+    upload,
+    confirmation,
+    needsManualConfirmation: !confirmation.ok && execution.digest !== null,
+    operatorNote: !confirmation.ok && execution.digest !== null
+      ? 'Upload and transaction submission completed, but the latest-version readback did not confirm success yet. Do not assume chain failure from this alone; run the confirmation command again.'
+      : null,
   };
-  const reportPath = path.join(reportDir, `add-version-${Date.now()}.json`);
-  await fs.writeFile(reportPath, `${stringifyForJson(report)}\n`, 'utf8');
+  const reportPath = await writeReport(reportDir, confirmation.ok ? 'add-version-success' : 'add-version-pending-confirmation', report);
   console.log(stringifyForJson({ ...report, reportPath }));
-  if (!args.run) console.error('Dry run only. Re-run with --run after explicit user confirmation.');
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.stack ?? error.message : String(error));
+main().catch(async (error) => {
+  const failure = {
+    ok: false,
+    error: createResultError('fatal', error),
+  };
+  console.error(stringifyForJson(failure));
   process.exitCode = 1;
 });

@@ -8,16 +8,10 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { setTimeout as delay } from 'node:timers/promises';
 
-import { SuiGrpcClient } from '@mysten/sui/grpc';
-import { SuiJsonRpcClient } from '@mysten/sui/jsonRpc';
-import { walrus } from '@mysten/walrus';
 import {
-  MAINNET_DEPLOYMENT,
+  ARTIFACT_TYPES,
   PaperProofTxBuilder,
-  createDeployment,
-  createPaperProofSDK,
   extractAddVersionResult,
   robustExecuteTransaction,
   robustWalrusWriteBlob,
@@ -25,6 +19,13 @@ import {
 } from '@paperproof/sdk-ts';
 
 import { loadSignerSet, normalizeAddress } from './lib/signer.mjs';
+import {
+  confirmLatestVersion,
+  createResultError,
+  createSkillRuntime,
+  getArg,
+  runPublishPreflight,
+} from './lib/publish-runtime.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -35,7 +36,8 @@ function usage() {
 Package the current worktree as a zip and add it as a new softwareRelease version.
 
 Usage:
-  node scripts/add-software-release-version-from-worktree.mjs --series=<seriesId> --run --signer-env=<env>
+  node scripts/add-software-release-version-from-worktree.mjs --series=<seriesId> --preflight --signer-env=<env> --account=4
+  node scripts/add-software-release-version-from-worktree.mjs --series=<seriesId> --run --signer-env=<env> --account=4
 
 Options:
   --series=<seriesId>                target software release series
@@ -48,13 +50,18 @@ Options:
   --report-dir=<dir>                defaults to ./artifacts
   --output-zip=<path>               defaults to ./artifacts/<project>-<timestamp>.zip
   --signer-mode=auto|single-env|indexed-env
+  --rpc=<url>
+  --transport=grpc|jsonrpc
+  --query-transport=none|jsonrpc|graphql|fallback
+  --walrus-relay=<url>
 `.trim();
 }
 
 function parseArgs(argv = process.argv.slice(2)) {
-  const args = { run: false, help: false };
+  const args = { run: false, help: false, preflight: false };
   for (const item of argv) {
     if (item === '--run') args.run = true;
+    else if (item === '--preflight' || item === '--preflight-only') args.preflight = true;
     else if (item === '--help' || item === '-h') args.help = true;
     else if (item.startsWith('--')) {
       const index = item.indexOf('=');
@@ -67,6 +74,24 @@ function parseArgs(argv = process.argv.slice(2)) {
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+async function loadAccount(args, required) {
+  const envSpecified = Boolean(getArg(args, 'signerEnv', 'signer-env'));
+  const mode = args.signerMode ?? args['signer-mode'] ?? (args.account ? 'indexed-env' : 'auto');
+  if (!required && !envSpecified && !args.account) return null;
+  try {
+    const accounts = await loadSignerSet(args, { defaultMode: mode });
+    const requested = Number(args.account ?? 4);
+    const account = (args.account || mode === 'indexed-env')
+      ? accounts.find((item) => item.index === requested)
+      : accounts[0];
+    assert(account, `No signer account available for selection ${requested}.`);
+    return { ok: true, account: requested, address: account.address, signer: account.signer };
+  } catch (error) {
+    if (!required) return { ...createResultError('signer', error), ok: false };
+    throw error;
+  }
 }
 
 function sha256Hex(bytes) {
@@ -88,31 +113,9 @@ async function execCapture(command, commandArgs, cwd) {
   });
 }
 
-async function waitForLatestVersion(sdk, seriesId, expectedVersionId, expectedContentHash, attempts = 6, delayMs = 2000) {
-  let last = null;
-  for (let index = 0; index < attempts; index += 1) {
-    last = await sdk.query.getSeriesDetails(seriesId);
-    if (last.series.currentVersionId === expectedVersionId && last.currentVersion.contentHash === expectedContentHash) {
-      return last;
-    }
-    if (index < attempts - 1) await delay(delayMs);
-  }
-  throw new Error(
-    `Latest version did not advance after ${attempts} checks. `
-    + `Observed currentVersionId=${last?.series?.currentVersionId ?? 'unknown'}, expected=${expectedVersionId}.`,
-  );
-}
-
 async function makeZip(outputZip) {
   await fs.mkdir(path.dirname(outputZip), { recursive: true });
-  const args = [
-    'archive',
-    '--format=zip',
-    '--output',
-    outputZip,
-    'HEAD',
-  ];
-  await execCapture('git', args, SKILL_ROOT);
+  await execCapture('git', ['archive', '--format=zip', '--output', outputZip, 'HEAD'], SKILL_ROOT);
 }
 
 async function readFileInfo(filePath) {
@@ -126,17 +129,20 @@ async function readFileInfo(filePath) {
   };
 }
 
-async function uploadContent(walrusClient, signer, fileInfo, label) {
-  const upload = await robustWalrusWriteBlob(walrusClient, signer, fileInfo.bytes, {
+async function uploadContent(runtime, signer, fileInfo, label) {
+  const upload = await robustWalrusWriteBlob(runtime.walrusClient, signer, fileInfo.bytes, {
     label: label.slice(0, 96),
     fallback: false,
-    attempts: 4,
+    attempts: runtime.retryAttempts,
+    baseDelayMs: runtime.retryBaseDelayMs,
     epochs: 10,
+    owner: signer.toSuiAddress(),
   });
   return {
     blobId: upload.blobId,
     blobObjectId: upload.blobObjectId,
     byteLength: fileInfo.fileSize,
+    strategy: 'sdk-write-blob',
   };
 }
 
@@ -152,6 +158,24 @@ function toSdkResponse(execution) {
   };
 }
 
+function confirmationCommand(args, runtime) {
+  const bits = [
+    'node .\\scripts\\query-series.mjs',
+    `--series=${args.series}`,
+    `--transport=${runtime.transport}`,
+    `--query-transport=${runtime.queryTransport}`,
+    `--rpc=${runtime.rpcUrl}`,
+  ];
+  return bits.join(' ');
+}
+
+async function writeReport(reportDir, prefix, report) {
+  await fs.mkdir(reportDir, { recursive: true });
+  const reportPath = path.join(reportDir, `${prefix}-${Date.now()}.json`);
+  await fs.writeFile(reportPath, `${stringifyForJson(report)}\n`, 'utf8');
+  return reportPath;
+}
+
 async function main() {
   const args = parseArgs();
   if (args.help) {
@@ -159,32 +183,74 @@ async function main() {
     return;
   }
 
-  assert(args.run, 'This helper is write-only. Pass --run to proceed.');
   assert(args.series, 'Missing --series=<seriesId>.');
+  const run = Boolean(args.run);
+  const runtime = createSkillRuntime(args);
+  const reportDir = path.resolve(args['report-dir'] ?? path.join(SKILL_ROOT, 'artifacts'));
+  const signerResult = await loadAccount(args, run);
+  const preflight = await runPublishPreflight({
+    runtime,
+    requireSigner: run,
+    signerResult,
+    seriesId: args.series,
+    expectedArtifactType: ARTIFACT_TYPES.softwareRelease,
+  });
 
-  const accounts = await loadSignerSet(args, { defaultMode: args.account ? 'indexed-env' : 'auto' });
-  const requested = Number(args.account ?? 4);
-  const account = (args.account || (args.signerMode ?? args['signer-mode']) === 'indexed-env')
-    ? accounts.find((item) => item.index === requested)
-    : accounts[0];
-  assert(account, `No signer account available for selection ${requested}.`);
+  const baseReport = {
+    ok: false,
+    run,
+    preflightOnly: Boolean(args.preflight) && !run,
+    transport: runtime.transport,
+    queryTransport: runtime.queryTransport,
+    rpcUrl: runtime.rpcUrl,
+    walrusRelay: runtime.walrusRelay,
+    sender: signerResult?.ok ? signerResult.address : null,
+    signerAccount: signerResult?.ok ? signerResult.account ?? null : null,
+    artifactType: 'softwareRelease',
+    seriesId: args.series,
+    preflight,
+    uploadOk: false,
+    transactionSubmitted: false,
+    transactionDigest: null,
+    chainResultObserved: false,
+    latestVersionConfirmed: false,
+    confirmationCommand: confirmationCommand(args, runtime),
+  };
 
-  const deployment = createDeployment(MAINNET_DEPLOYMENT);
-  const sdk = createPaperProofSDK({ network: 'mainnet', transport: 'grpc', queryTransport: 'none' });
-  const sui = new SuiJsonRpcClient({ url: deployment.rpcUrl ?? 'https://fullnode.mainnet.sui.io:443' });
-  const walrusClient = new SuiGrpcClient({ baseUrl: deployment.rpcUrl, network: 'mainnet' }).$extend(
-    walrus({
-      network: 'mainnet',
-      uploadRelay: {
-        host: 'https://upload-relay.mainnet.walrus.space',
-        sendTip: { max: 5_000_000 },
+  if (args.preflight && !run) {
+    const reportPath = await writeReport(reportDir, 'software-release-preflight', { ...baseReport, ok: preflight.ok });
+    console.log(stringifyForJson({ ...baseReport, ok: preflight.ok, reportPath }));
+    return;
+  }
+
+  if (!preflight.ok) {
+    const reportPath = await writeReport(reportDir, 'software-release-preflight-failed', {
+      ...baseReport,
+      error: {
+        category: 'preflight',
+        code: 'PREFLIGHT_FAILED',
+        summary: 'Preflight failed. No Walrus upload or add-version transaction was attempted.',
+        criticalFailures: preflight.criticalFailures,
       },
-    }),
-  );
+    });
+    console.log(stringifyForJson({
+      ...baseReport,
+      error: {
+        category: 'preflight',
+        code: 'PREFLIGHT_FAILED',
+        summary: 'Preflight failed. No Walrus upload or add-version transaction was attempted.',
+        criticalFailures: preflight.criticalFailures,
+      },
+      reportPath,
+    }));
+    return;
+  }
 
-  const details = await sdk.query.getSeriesDetails(args.series);
-  assert(Number(details.series.artifactType) === 5, 'Target series is not a softwareRelease.');
-  assert(normalizeAddress(details.series.owner) === account.address, `Series owner ${details.series.owner} does not match signer ${account.address}.`);
+  const details = await runtime.sdk.query.getSeriesDetails(args.series);
+  assert(Number(details.series.artifactType) === ARTIFACT_TYPES.softwareRelease, 'Target series is not a softwareRelease.');
+  if (signerResult?.ok) {
+    assert(normalizeAddress(details.series.owner) === signerResult.address, `Series owner ${details.series.owner} does not match signer ${signerResult.address}.`);
+  }
 
   const current = details.currentVersion.rawFields ?? {};
   const shortSha = await execCapture('git', ['rev-parse', '--short', 'HEAD'], SKILL_ROOT);
@@ -196,16 +262,80 @@ async function main() {
   const versionName = args['version-name'] ?? `v${nextVersion}`;
   const repositoryUrl = args['repository-url'] ?? current.repository_url ?? 'https://github.com/PaperProofLabs/paperproof-community-skill';
   const license = args.license ?? current.license ?? 'Apache-2.0';
-  const changelog = args.changelog ?? `paperproof-community-skill community usability refactor and generic retention workflow ${timestamp}`;
-
-  const reportDir = path.resolve(args['report-dir'] ?? path.join(SKILL_ROOT, 'artifacts'));
+  const changelog = args.changelog ?? `paperproof-community-skill transport and preflight hardening ${timestamp}`;
   const outputZip = path.resolve(args['output-zip'] ?? path.join(reportDir, `${projectName}-${timestamp}.zip`));
 
   await makeZip(outputZip);
   const fileInfo = await readFileInfo(outputZip);
-  const upload = await uploadContent(walrusClient, account.signer, fileInfo, `paperproof-software-release-${projectName}`);
 
-  const txb = new PaperProofTxBuilder(deployment);
+  if (!run) {
+    const reportPath = await writeReport(reportDir, 'software-release-dry-run', {
+      ...baseReport,
+      ok: true,
+      artifactCode: details.series.artifactCode,
+      seriesOwner: details.series.owner,
+      previousVersion: details.series.currentVersion,
+      previousVersionId: details.series.currentVersionId,
+      previousContentHash: details.currentVersion.contentHash,
+      projectName,
+      versionName,
+      sourceHash,
+      zipPath: outputZip,
+      zipSize: fileInfo.fileSize,
+      contentHash: fileInfo.contentHash,
+    });
+    console.log(stringifyForJson({
+      ...baseReport,
+      ok: true,
+      artifactCode: details.series.artifactCode,
+      seriesOwner: details.series.owner,
+      previousVersion: details.series.currentVersion,
+      previousVersionId: details.series.currentVersionId,
+      previousContentHash: details.currentVersion.contentHash,
+      projectName,
+      versionName,
+      sourceHash,
+      zipPath: outputZip,
+      zipSize: fileInfo.fileSize,
+      contentHash: fileInfo.contentHash,
+      reportPath,
+    }));
+    return;
+  }
+
+  let upload;
+  try {
+    upload = await uploadContent(runtime, signerResult.signer, fileInfo, `paperproof-software-release-${projectName}`);
+  } catch (error) {
+    const reportPath = await writeReport(reportDir, 'software-release-upload-failed', {
+      ...baseReport,
+      artifactCode: details.series.artifactCode,
+      seriesOwner: details.series.owner,
+      previousVersion: details.series.currentVersion,
+      previousVersionId: details.series.currentVersionId,
+      previousContentHash: details.currentVersion.contentHash,
+      zipPath: outputZip,
+      zipSize: fileInfo.fileSize,
+      contentHash: fileInfo.contentHash,
+      error: createResultError('upload', error, { transport: runtime.transport }),
+    });
+    console.log(stringifyForJson({
+      ...baseReport,
+      artifactCode: details.series.artifactCode,
+      seriesOwner: details.series.owner,
+      previousVersion: details.series.currentVersion,
+      previousVersionId: details.series.currentVersionId,
+      previousContentHash: details.currentVersion.contentHash,
+      zipPath: outputZip,
+      zipSize: fileInfo.fileSize,
+      contentHash: fileInfo.contentHash,
+      error: createResultError('upload', error, { transport: runtime.transport }),
+      reportPath,
+    }));
+    return;
+  }
+
+  const txb = new PaperProofTxBuilder(runtime.deployment);
   const tx = txb.addSoftwareReleaseVersion({
     seriesId: args.series,
     projectName,
@@ -226,19 +356,63 @@ async function main() {
       { key: 'worktree', value: isDirty ? 'dirty' : 'clean' },
     ],
   });
-  tx.setSenderIfNotSet(account.address);
+  tx.setSenderIfNotSet(signerResult.address);
 
-  const execution = await robustExecuteTransaction(sui, account.signer, tx, 'add software release version');
-  const added = extractAddVersionResult(toSdkResponse(execution), deployment);
-  await waitForLatestVersion(sdk, args.series, added.versionId, fileInfo.contentHash);
+  let execution;
+  try {
+    execution = await robustExecuteTransaction(runtime.baseClient, signerResult.signer, tx, 'add software release version', {
+      attempts: runtime.retryAttempts,
+      baseDelayMs: runtime.retryBaseDelayMs,
+    });
+  } catch (error) {
+    const reportPath = await writeReport(reportDir, 'software-release-transaction-failed', {
+      ...baseReport,
+      artifactCode: details.series.artifactCode,
+      seriesOwner: details.series.owner,
+      previousVersion: details.series.currentVersion,
+      previousVersionId: details.series.currentVersionId,
+      previousContentHash: details.currentVersion.contentHash,
+      zipPath: outputZip,
+      zipSize: fileInfo.fileSize,
+      contentHash: fileInfo.contentHash,
+      uploadOk: true,
+      upload,
+      error: createResultError('transaction', error, { transport: runtime.transport }),
+    });
+    console.log(stringifyForJson({
+      ...baseReport,
+      artifactCode: details.series.artifactCode,
+      seriesOwner: details.series.owner,
+      previousVersion: details.series.currentVersion,
+      previousVersionId: details.series.currentVersionId,
+      previousContentHash: details.currentVersion.contentHash,
+      zipPath: outputZip,
+      zipSize: fileInfo.fileSize,
+      contentHash: fileInfo.contentHash,
+      uploadOk: true,
+      upload,
+      error: createResultError('transaction', error, { transport: runtime.transport }),
+      reportPath,
+    }));
+    return;
+  }
+
+  const added = extractAddVersionResult(toSdkResponse(execution), runtime.deployment);
+  const confirmation = await confirmLatestVersion({
+    runtime,
+    seriesId: args.series,
+    expectedVersionId: added.versionId,
+    expectedContentHash: fileInfo.contentHash,
+  });
 
   const report = {
+    ...baseReport,
     ok: true,
-    sender: account.address,
     artifactCode: details.series.artifactCode,
-    seriesId: args.series,
+    seriesOwner: details.series.owner,
     previousVersion: details.series.currentVersion,
     previousVersionId: details.series.currentVersionId,
+    previousContentHash: details.currentVersion.contentHash,
     newVersion: String(added.version),
     newVersionId: added.versionId,
     projectName,
@@ -250,17 +424,27 @@ async function main() {
     zipPath: outputZip,
     zipSize: fileInfo.fileSize,
     contentHash: fileInfo.contentHash,
-    upload,
+    uploadOk: true,
+    transactionSubmitted: true,
     transactionDigest: execution.digest,
+    chainResultObserved: true,
+    latestVersionConfirmed: confirmation.ok,
+    upload,
+    confirmation,
+    needsManualConfirmation: !confirmation.ok,
+    operatorNote: !confirmation.ok
+      ? 'Upload and transaction submission completed, but latest-version confirmation did not finish through the current read path. Re-run the confirmation command before treating this as failure.'
+      : null,
   };
 
-  await fs.mkdir(reportDir, { recursive: true });
-  const reportPath = path.join(reportDir, `software-release-add-version-${Date.now()}.json`);
-  await fs.writeFile(reportPath, `${stringifyForJson(report)}\n`, 'utf8');
+  const reportPath = await writeReport(reportDir, confirmation.ok ? 'software-release-success' : 'software-release-pending-confirmation', report);
   console.log(stringifyForJson({ ...report, reportPath }));
 }
 
 main().catch((error) => {
-  console.error(error instanceof Error ? error.stack ?? error.message : String(error));
+  console.error(stringifyForJson({
+    ok: false,
+    error: createResultError('fatal', error),
+  }));
   process.exitCode = 1;
 });

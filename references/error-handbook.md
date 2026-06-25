@@ -23,6 +23,23 @@ Diagnose by layer. Do not collapse every failure into a generic publish failure.
 | MemWal relayer request failed | relayer/network/CORS issue | Explain memory save unavailable; keep other Copilot features usable |
 | Invalid params from chain read | wrong provider method shape or object/event query params | Check SDK provider adapter and endpoint compatibility |
 | Stale shared object error | transaction built against old shared object versions | Rebuild PTB and retry once |
+| `add-version-from-local-file.mjs` fails with `fetch failed` during Walrus upload | local gRPC transport is unstable while upload relay HTTP is still usable | Retry with the helper's manual Walrus fallback path, which builds register/certify transactions locally and keeps the same add-version workflow |
+| `ECONNRESET` or TLS reset before RPC handshake | endpoint path is unstable, often before JSON-RPC or gRPC can complete | Switch the helper to `--transport=jsonrpc`, retry, and keep the exact RPC URL in the report |
+| gRPC `GetFunction` / `GetBalance` / `UNAVAILABLE` | gRPC provider path is degraded | Prefer `--transport=jsonrpc` for read/write preparation and keep gRPC only when explicitly needed |
+| JSON-RPC object read failure such as `multiGetObjects` | endpoint reachable but object read path is flaky | Retry with backoff, then separate "confirmation failed" from "transaction failed" in the operator report |
+| Upload and transaction digest exist but `latestVersionConfirmed=false` | write may have succeeded, but readback confirmation path failed | Do not assume add-version failed; re-run the helper's confirmation command or `query-series.mjs` |
+
+## Operator Notes
+
+For community publish helpers, classify failures in this order:
+
+- preflight failed before any write
+- Walrus upload failed before transaction submission
+- transaction submission failed
+- chain result could not be observed from returned events
+- latest version confirmation failed after a transaction digest was obtained
+
+Only the first three states should be treated as clear publish failures. The last two require follow-up confirmation before concluding the chain write failed.
 
 ## Move Abort Guidance
 
